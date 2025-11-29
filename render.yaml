@@ -1,0 +1,24 @@
+# Render Blueprint for the Web Automation Worker
+services:
+  - type: worker
+    name: pairing-code-scraper
+    env: docker
+    dockerfilePath: Dockerfile
+    autoDeploy: false # Set to true if you want automatic deployments on every git push
+    buildCommand: "" # Not needed when using a Dockerfile
+    startCommand: "python main.py"
+    envVars:
+      - key: TARGET_URL
+        value: https://levanter-delta.vercel.app/
+      - key: MOBILE_NUMBER
+        # ⚠️ IMPORTANT: Replace with the phone number you need to input
+        # MUST include the international code (e.g., +15551234567)
+        value: "" 
+      - key: TELEGRAM_BOT_TOKEN
+        # ⚠️ IMPORTANT: Replace with your Telegram Bot's API Token
+        sync: false # Set to false for secrets
+        value: "" 
+      - key: TELEGRAM_CHAT_ID
+        # ⚠️ IMPORTANT: Replace with the ID of the chat/group to receive the code
+        sync: false # Set to false for secrets
+        value: ""
