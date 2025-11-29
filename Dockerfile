@@ -11,8 +11,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of your application code
 COPY . .
 
-# This Dockerfile is used by the Render Web Service blueprint
-# The command is defined in render.yaml's startCommand
-# No CMD is strictly needed here as the startCommand in render.yaml overrides it, 
-# but it's often good practice to include one for a final fallback.
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "main:app"]
+# The CMD is not strictly needed for this webhook setup but serves as a general container instruction
+CMD ["python", "main.py"]
