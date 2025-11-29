@@ -1,24 +1,25 @@
-# Render Blueprint for the Web Automation Worker
+# Render Blueprint for the Web Automation Web Service
 services:
-  - type: worker
-    name: pairing-code-scraper
+  - type: web
+    name: pairing-code-service
     env: docker
     dockerfilePath: Dockerfile
-    autoDeploy: false # Set to true if you want automatic deployments on every git push
-    buildCommand: "" # Not needed when using a Dockerfile
-    startCommand: "python main.py"
+    autoDeploy: false
+    buildCommand: ""
+    
+    # CRITICAL: Gunicorn starts the Flask app, listening on the port provided by Render.
+    startCommand: "gunicorn --bind 0.0.0.0:$PORT main:app" 
+
     envVars:
+      # General Config (non-secret, value is explicit)
       - key: TARGET_URL
         value: https://levanter-delta.vercel.app/
+        
+      # 🔐 SECRETS: sync: false tells Render to manage the value securely 
+      # in the dashboard. The 'value' field is omitted.
       - key: MOBILE_NUMBER
-        # ⚠️ IMPORTANT: Replace with the phone number you need to input
-        # MUST include the international code (e.g., +15551234567)
-        value: "" 
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
-        # ⚠️ IMPORTANT: Replace with your Telegram Bot's API Token
-        sync: false # Set to false for secrets
-        value: "" 
+        sync: false
       - key: TELEGRAM_CHAT_ID
-        # ⚠️ IMPORTANT: Replace with the ID of the chat/group to receive the code
-        sync: false # Set to false for secrets
-        value: ""
+        sync: false
