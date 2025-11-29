@@ -4,6 +4,7 @@ import httpx
 from playwright.async_api import async_playwright
 
 # --- CONFIGURATION (Loaded from Environment Variables) ---
+# NOTE: In a cloud environment like Render, these are set in the dashboard/render.yaml
 TARGET_URL = os.getenv("TARGET_URL", "https://levanter-delta.vercel.app/")
 MOBILE_NUMBER = os.getenv("MOBILE_NUMBER") # e.g., "+15551234567"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -97,14 +98,13 @@ async def pairing_code_automation():
             await page.goto(TARGET_URL, wait_until="domcontentloaded")
             print("➡️ Navigated to homepage.")
 
-            # 2. Click on the 'Session' link/card (from the first screenshot)
+            # 2. Click on the 'Session' link/card
             session_selector = 'text="Session"'
             await page.click(session_selector)
             print("🖱️ Clicked 'Session' link.")
             
-            # 3. Click the 'Get Pairing Code' button (from the second set of screenshots)
+            # 3. Click the 'Get Pairing Code' button
             get_code_button_selector = 'button:has-text("Get Pairing Code")'
-            # Wait for the button to appear after the 'Session' click
             await page.wait_for_selector(get_code_button_selector, timeout=10000)
             await page.click(get_code_button_selector)
             print("🖱️ Clicked 'Get Pairing Code'.")
@@ -123,7 +123,7 @@ async def pairing_code_automation():
             print("🖱️ Clicked 'Generate Pairing Code'. Waiting for the result code...")
 
             # 7. Synchronization & Extraction: Wait for the resulting code to appear
-            # The selector is still a best-guess and might need tuning if the final code is not found!
+            # Best-guess selector for the final code display
             result_code_selector = 'h2.pairing-code-display' 
             
             # Wait for the result element to appear
