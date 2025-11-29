@@ -1,15 +1,21 @@
 # Render Blueprint for the Web Automation Web Service
 services:
   - type: web
-    name: pairing-code-service
+    name: pairing-code-bot
     env: docker
     dockerfilePath: Dockerfile
-    autoDeploy: false 
+    # Set autoDeploy to true to update automatically when you push to GitHub
+    autoDeploy: true 
+    # Build phase runs the Dockerfile instructions
     buildCommand: ""
     
-    # CRITICAL FIX: Using 'sh -c' ensures the shell expands $PORT 
-    # into a real number before Gunicorn runs.
-    startCommand: "sh -c 'gunicorn --bind 0.0.0.0:$PORT main:app'" 
+    # CRITICAL: Simply run the Python script directly. The script handles port binding
+    # and the webhook server using the telegram bot library.
+    startCommand: "python main.py"
+    
+    # Render needs the web service to be open on the port defined by the PORT env var
+    # The bot script reads the PORT variable (defaulting to 8080)
+    port: 8080 # This sets the expected port for Render's health check
 
     envVars:
       # General Config (non-secret, value is explicit)
@@ -17,10 +23,6 @@ services:
         value: https://levanter-delta.vercel.app/
         
       # 🔐 SECRETS: sync: false tells Render to manage the value securely 
-      # in the dashboard. The 'value' field is omitted.
-      - key: MOBILE_NUMBER
-        sync: false
+      # in the dashboard. You MUST set the value in the Render UI.
       - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
         sync: false
