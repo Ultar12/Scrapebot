@@ -4,11 +4,12 @@ services:
     name: pairing-code-service
     env: docker
     dockerfilePath: Dockerfile
-    autoDeploy: false
+    autoDeploy: false 
     buildCommand: ""
     
-    # CRITICAL: Gunicorn starts the Flask app, listening on the port provided by Render.
-    startCommand: "gunicorn --bind 0.0.0.0:$PORT main:app" 
+    # CRITICAL FIX: Using 'sh -c' ensures the shell expands $PORT 
+    # into a real number before Gunicorn runs.
+    startCommand: "sh -c 'gunicorn --bind 0.0.0.0:$PORT main:app'" 
 
     envVars:
       # General Config (non-secret, value is explicit)
