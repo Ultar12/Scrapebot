@@ -1,6 +1,7 @@
 import asyncio
 import os
 import logging
+import re
 from playwright.async_api import async_playwright
 
 from telegram import Update
@@ -15,7 +16,10 @@ logger = logging.getLogger(__name__)
 PORT = int(os.environ.get("PORT", 8080))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL_BASE = os.getenv("WEBHOOK_URL_BASE")
-TARGET_URL = os.getenv("TARGET_URL", "https://levanter-delta.vercel.app/")
+
+# Define target URLs for the two services
+URL_LEVANTER = os.getenv("URL_LEVANTER", "https://levanter-delta.vercel.app/")
+URL_RAGANORK = os.getenv("URL_RAGANORK", "https://session.raganork.site/")
 
 # List of common keywords/domains associated with ads/tracking to block
 AD_BLOCK_DOMAINS = [
@@ -24,7 +28,7 @@ AD_BLOCK_DOMAINS = [
     "fonts.gstatic.com", "yandex", "popup", "ad", "redirect" 
 ]
 
-# --- Playwright Request Handler ---
+# --- Playwright Request Handler (Ad Blocker) ---
 
 async def route_handler(route):
     """Aborts requests for known ad/tracker domains and non-essential assets."""
@@ -36,7 +40,7 @@ async def route_handler(route):
     else:
         await route.continue_()
 
-# --- Self-Correcting Navigation Function ---
+# --- Self-Correcting Navigation Function for Levanter ---
 
 async def safe_click_and_correct(page, selector, target_page_url, attempt=1):
     """
@@ -79,122 +83,181 @@ async def safe_click_and_correct(page, selector, target_page_url, attempt=1):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message and instructions on /start."""
     await update.message.reply_html(
-        "👋 Welcome! I am the Levanter Pairing Code Bot.\n\n"
-        "To start the process, use the command below, replacing <code>+1234567890</code> "
-        "with the full international mobile number:\n\n"
-        "<code>/pairlevanter +1234567890</code>"
+        "👋 Welcome! I am your multi-service pairing code bot.\n\n"
+        "Available Commands:\n"
+        "1. **Levanter:** <code>/pairlevanter +123...</code> (URL: {})\n"
+        "2. **Raganork:** <code>/pairrag +123...</code> (URL: {})\n\n"
+        "Please use the full international number format (e.g., +23480...)".format(URL_LEVANTER, URL_RAGANORK)
     )
 
 async def pair_levanter_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the /pairlevanter command, extracts the number, and starts the job."""
-    
+    """Handles the /pairlevanter command."""
     if not context.args:
-        await update.message.reply_text(
-            "❌ Error: Please provide the mobile number in international format.\n"
-            "Example: /pairlevanter +1234567890"
-        )
+        await update.message.reply_text("❌ Error: Please provide the mobile number. Example: /pairlevanter +1234567890")
         return
-
     mobile_number = context.args[0].strip()
-    
-    if not mobile_number.startswith('+') or len(mobile_number) < 8:
-        await update.message.reply_text(
-            "❌ Error: The number format seems incorrect. It must start with '+' "
-            "and include the country code (e.g., +15551234567)."
-        )
-        return
-
-    await update.message.reply_text(
-        f"⏳ Processing request for number: `{mobile_number}`. This might take up to 60 seconds..."
-    )
-
+    await update.message.reply_text(f"⏳ Processing Levanter request for `{mobile_number}`. This might take up to 60 seconds...")
     try:
-        # Create a non-blocking task to run the long-running automation
-        asyncio.create_task(pairing_code_automation_task(update, mobile_number))
+        asyncio.create_task(levanter_pairing_automation_task(update, mobile_number))
     except Exception as e:
-        logger.error(f"Failed to create automation task: {e}")
-        await update.message.reply_text(f"🚨 Critical Error: Could not start the automation process. {e}")
+        await update.message.reply_text(f"🚨 Critical Error: Could not start the Levanter automation process. {e}")
+
+async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the /pairrag command."""
+    if not context.args:
+        await update.message.reply_text("❌ Error: Please provide the mobile number. Example: /pairrag +2348012345678")
+        return
+    mobile_number = context.args[0].strip()
+    await update.message.reply_text(f"⏳ Processing Raganork request for `{mobile_number}`. This might take up to 45 seconds...")
+    try:
+        asyncio.create_task(raganork_pairing_automation_task(update, mobile_number))
+    except Exception as e:
+        await update.message.reply_text(f"🚨 Critical Error: Could not start the Raganork automation process. {e}")
 
 
-# --- Core Automation Logic (Asynchronous) ---
+# --- Automation Task 1: Levanter (High Redirect Risk) ---
 
-async def pairing_code_automation_task(update: Update, mobile_number: str):
-    """Performs the full asynchronous automation job and sends the result to Telegram."""
+async def levanter_pairing_automation_task(update: Update, mobile_number: str):
+    # This task uses the complex self-correcting logic (safe_click_and_correct)
     
-    logger.info(f"Starting Playwright job for number: {mobile_number}")
+    logger.info(f"Starting Levanter Playwright job for number: {mobile_number}")
     
     async with async_playwright() as p:
-        # Launching Chromium. We rely on Heroku/Aptfile for dependencies.
-        browser = await p.chromium.launch(
-            headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        )
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
         page = await browser.new_page()
-
         await page.route("**/*", route_handler)
-        logger.info("Ads and non-essential assets blocked.")
 
         try:
-            # Navigate to the target site
-            await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=75000) 
-            logger.info("Navigated to homepage.")
+            await page.goto(URL_LEVANTER, wait_until="domcontentloaded", timeout=75000) 
             
-            # 1. Click 'Session' (Uses safe click)
+            # 1. Click 'Session' and handle redirection
             session_selector = 'text="Session"'
-            await safe_click_and_correct(page, session_selector, TARGET_URL)
-            logger.info("Successfully clicked 'Session'.")
+            await safe_click_and_correct(page, session_selector, URL_LEVANTER)
             
-            # 2. Click 'Get Pairing Code' button (Uses safe click)
+            # 2. Click 'Get Pairing Code' button and handle redirection
             get_code_button_selector = 'button:has-text("Get Pairing Code")'
             await page.wait_for_selector(get_code_button_selector, timeout=15000)
-            await safe_click_and_correct(page, get_code_button_selector, TARGET_URL)
-            logger.info("Successfully clicked 'Get Pairing Code'.")
+            await safe_click_and_correct(page, get_code_button_selector, URL_LEVANTER)
 
-            # 3. Fill the number (Wait for the input to appear)
+            # 3. Fill the number 
             input_box_selector = 'input[placeholder*="+1234567890"]'
             await page.wait_for_selector(input_box_selector, timeout=15000)
             await page.fill(input_box_selector, mobile_number)
-            logger.info(f"Inputted mobile number: {mobile_number}")
 
-            # 4. Click 'Generate Pairing Code' (This should not redirect, so use standard click)
+            # 4. Click 'Generate Pairing Code' (standard click)
             generate_button_selector = 'button:has-text("Generate Pairing Code")'
             await page.click(generate_button_selector)
-            logger.info("Clicked 'Generate Pairing Code'.")
 
             # 5. Wait for the resulting pairing code
-            # Wait for the input box to become hidden, signifying form submission success.
             await page.wait_for_selector(input_box_selector, state='hidden', timeout=30000)
             
-            # Now, grab the code.
             result_code_selector = 'h2' 
             await page.wait_for_selector(result_code_selector, state='attached', timeout=15000)
             
             final_code = await page.inner_text(result_code_selector)
             code_text = final_code.strip()
             
-            if len(code_text) < 4 or len(code_text) > 50 or "Error" in code_text or "Mobile" in code_text:
+            if len(code_text) < 4 or "Error" in code_text:
                  raise ValueError(f"Extraction failed. Resulted in: {code_text}")
 
-            logger.info(f"Successfully extracted Pairing Code: {code_text}")
-            
             await update.message.reply_html(
-                f"🎉 Automation Complete! The pairing code for <code>{mobile_number}</code> is:\n\n"
-                f"<code>{code_text}</code>"
+                f"🎉 Levanter Code for <code>{mobile_number}</code>:\n\n<code>{code_text}</code>"
             )
             
         except Exception as e:
-            error_msg = f"Automation failed. Error: {type(e).__name__} - {str(e)}"
-            logger.error(error_msg)
-            
+            logger.error(f"Levanter Automation failed: {e}")
             await update.message.reply_text(
-                f"❌ Automation failed for `{mobile_number}`. \n\n"
-                f"The web process failed to bypass the redirect or find a crucial element. Please verify the number and try again. \n\n"
-                f"Error details: {type(e).__name__}"
+                f"❌ Levanter automation failed for `{mobile_number}`. Error: {type(e).__name__}"
             )
             
         finally:
             await browser.close()
-            logger.info("Browser closed.")
+            logger.info("Levanter Browser closed.")
+
+
+# --- Automation Task 2: Raganork (Simpler Sequential Logic) ---
+
+async def raganork_pairing_automation_task(update: Update, mobile_number: str):
+    
+    logger.info(f"Starting Raganork Playwright job for number: {mobile_number}")
+    
+    # Pre-process the number: separate country code and number body
+    match = re.match(r"^\+(\d+)(.*)$", mobile_number)
+    if not match:
+        await update.message.reply_text("❌ Raganork: Invalid mobile number format.")
+        return
+        
+    country_code = f"+{match.group(1)}"
+    number_body = match.group(2)
+    # Raganork requires removing a leading '0' if present in the number body
+    if number_body.startswith('0'):
+        number_body = number_body[1:]
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
+        page = await browser.new_page()
+        await page.route("**/*", route_handler)
+
+        try:
+            await page.goto(URL_RAGANORK, wait_until="domcontentloaded", timeout=45000) 
+            logger.info("Navigated to Raganork homepage.")
+
+            # 1. Click 'Enter code' button
+            enter_code_selector = 'button:has-text("Enter code")'
+            await page.click(enter_code_selector, timeout=10000)
+            logger.info("Clicked 'Enter code'.")
+            
+            # 2. Click the country code dropdown to open the list
+            country_dropdown_selector = 'div.country-code-select' # Assuming a generic selector for the dropdown
+            await page.wait_for_selector(country_dropdown_selector, timeout=10000)
+            await page.click(country_dropdown_selector)
+            logger.info("Clicked country code dropdown.")
+
+            # 3. Select the correct country code
+            # Since the country list is long and scrollable, we target the specific text.
+            country_code_option_selector = f'text="{country_code}"'
+            await page.wait_for_selector(country_code_option_selector, timeout=10000)
+            
+            # Use keyboard interaction/scrolling if needed, but a direct click is usually more reliable
+            await page.click(country_code_option_selector)
+            logger.info(f"Selected country code: {country_code}.")
+            
+            # 4. Input the phone number body (without leading zero)
+            phone_input_selector = 'input[placeholder="Enter phone number"]'
+            await page.wait_for_selector(phone_input_selector, timeout=10000)
+            await page.fill(phone_input_selector, number_body)
+            logger.info(f"Inputted number body: {number_body}")
+
+            # 5. Click 'GET CODE'
+            get_code_button_selector = 'button:has-text("GET CODE")'
+            await page.click(get_code_button_selector)
+            logger.info("Clicked 'GET CODE'.")
+            
+            # 6. Wait for the result modal to appear
+            # Assuming the result is displayed in a modal that appears after the button click.
+            result_field_selector = 'input[readonly]'
+            await page.wait_for_selector(result_field_selector, state='attached', timeout=30000)
+            
+            # Extract the code from the input field
+            final_code = await page.get_attribute(result_field_selector, 'value')
+            code_text = final_code.strip()
+
+            if len(code_text) < 4:
+                 raise ValueError(f"Extraction failed. Resulted in: {code_text}")
+
+            await update.message.reply_html(
+                f"🎉 Raganork Code for <code>{mobile_number}</code>:\n\n<code>{code_text}</code>"
+            )
+            
+        except Exception as e:
+            logger.error(f"Raganork Automation failed: {e}")
+            await update.message.reply_text(
+                f"❌ Raganork automation failed for `{mobile_number}`. Error: {type(e).__name__}"
+            )
+            
+        finally:
+            await browser.close()
+            logger.info("Raganork Browser closed.")
 
 
 # --- Main Application Runner ---
@@ -212,6 +275,7 @@ def main() -> None:
     
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("pairlevanter", pair_levanter_command))
+    application.add_handler(CommandHandler("pairrag", pair_raganork_command))
 
     # Construct the app URL dynamically using the provided base URL
     app_url = WEBHOOK_URL_BASE
