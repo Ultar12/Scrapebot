@@ -10,20 +10,16 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
-# Heroku provides the PORT variable for web services
 PORT = int(os.environ.get("PORT", 8080))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-# CRITICAL CHANGE: Use WEBHOOK_URL_BASE instead of HEROKU_APP_NAME
 WEBHOOK_URL_BASE = os.getenv("WEBHOOK_URL_BASE")
-
 TARGET_URL = os.getenv("TARGET_URL", "https://levanter-delta.vercel.app/")
 
 # List of common keywords/domains associated with ads/tracking to block
 AD_BLOCK_DOMAINS = [
     "google-analytics", "doubleclick", "adservice", "googlesyndication", 
     "facebook.com/tr", "hotjar", "analytics", "cloudflareinsights",
-    "fonts.gstatic.com"
+    "fonts.gstatic.com", "yandex"
 ]
 
 # --- Playwright Request Handler ---
@@ -39,13 +35,13 @@ async def route_handler(route):
         await route.continue_()
 
 
-# --- Telegram Command Handlers (rest unchanged) ---
+# --- Telegram Command Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message and instructions on /start."""
     await update.message.reply_html(
         "👋 Welcome! I am the Levanter Pairing Code Bot.\n\n"
-        "To start the process, use the command below, replacing `+1234567890` "
+        "To start the process, use the command below, replacing <code>+1234567890</code> "
         "with the full international mobile number:\n\n"
         "<code>/pairlevanter +1234567890</code>"
     )
@@ -70,7 +66,7 @@ async def pair_levanter_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     await update.message.reply_text(
-        f"⏳ Processing request for number: `{mobile_number}`. This might take up to 30 seconds..."
+        f"⏳ Processing request for number: `{mobile_number}`. This might take up to 45 seconds..."
     )
 
     try:
@@ -89,6 +85,7 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
     logger.info(f"Starting Playwright job for number: {mobile_number}")
     
     async with async_playwright() as p:
+        # Launching Chromium. We rely on Heroku/Aptfile for dependencies.
         browser = await p.chromium.launch(
             headless=True,
             args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -99,40 +96,43 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
         logger.info("Ads and non-essential assets blocked.")
 
         try:
-            await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
+            # Increased page timeout for slower connections/render times
+            await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=75000) 
             logger.info("Navigated to homepage.")
             
             # 1. Click 'Session'
             session_selector = 'text="Session"'
-            await page.click(session_selector, timeout=10000)
+            await page.click(session_selector, timeout=15000)
             logger.info("Clicked 'Session'.")
             
-            # 2. Click 'Get Pairing Code' button
+            # 2. Click 'Get Pairing Code' button (the visible button on the next page/modal)
             get_code_button_selector = 'button:has-text("Get Pairing Code")'
-            await page.wait_for_selector(get_code_button_selector, timeout=10000)
+            await page.wait_for_selector(get_code_button_selector, timeout=15000)
             await page.click(get_code_button_selector)
-            logger.info("Clicked 'Get Pairing Code'.")
+            logger.info("Clicked first 'Get Pairing Code'.")
 
             # 3. Wait for the mobile number input modal to appear and fill the number
+            # Using a highly generic input selector for better reliability
             input_box_selector = 'input[placeholder*="+1234567890"]'
-            await page.wait_for_selector(input_box_selector, timeout=10000)
+            await page.wait_for_selector(input_box_selector, timeout=15000)
             await page.fill(input_box_selector, mobile_number)
             logger.info(f"Inputted mobile number: {mobile_number}")
 
-            # 4. Click 'Generate Pairing Code' (the second time)
+            # 4. Click 'Generate Pairing Code' (the button inside the modal/form)
             generate_button_selector = 'button:has-text("Generate Pairing Code")'
             await page.click(generate_button_selector)
             logger.info("Clicked 'Generate Pairing Code'.")
 
             # 5. Wait for the resulting pairing code
+            # We wait up to 30 seconds for the code to be processed and displayed.
             result_code_selector = 'h2' 
-            await page.wait_for_selector(result_code_selector, state='attached', timeout=25000)
+            await page.wait_for_selector(result_code_selector, state='attached', timeout=30000)
             
             final_code = await page.inner_text(result_code_selector)
             code_text = final_code.strip()
             
-            if len(code_text) > 50 or not code_text or "Error" in code_text or "Mobile" in code_text:
-                 raise ValueError("Extraction failed or returned an error message.")
+            if len(code_text) < 4 or len(code_text) > 50 or "Error" in code_text or "Mobile" in code_text:
+                 raise ValueError(f"Extraction failed. Resulted in: {code_text}")
 
             logger.info(f"Successfully extracted Pairing Code: {code_text}")
             
@@ -159,14 +159,12 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
 # --- Main Application Runner ---
 
 def main() -> None:
-    """Start the bot."""
+    """Start the bot in Webhook mode for Heroku."""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN environment variable is not set. Exiting.")
         return
-    
-    # Check for the required webhook URL
     if not WEBHOOK_URL_BASE:
-        logger.error("WEBHOOK_URL_BASE environment variable is not set. Cannot configure webhook. Exiting.")
+        logger.error("WEBHOOK_URL_BASE environment variable is not set. Exiting.")
         return
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -174,16 +172,18 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("pairlevanter", pair_levanter_command))
 
+    # Heroku environment always requires webhook/server mode for web processes
+    
+    app_url = WEBHOOK_URL_BASE
+    
+    logger.info(f"Running in Webhook mode on port {PORT}. Base URL: {app_url}")
+    
     # Configure the webhook
-    webhook_url = f"{WEBHOOK_URL_BASE}{TELEGRAM_BOT_TOKEN}"
-    
-    logger.info(f"Running in Webhook mode on port {PORT}. Webhook URL: {webhook_url}")
-    
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=TELEGRAM_BOT_TOKEN, 
-        webhook_url=webhook_url
+        webhook_url=f"{app_url.rstrip('/')}/{TELEGRAM_BOT_TOKEN}"
     )
 
 if __name__ == "__main__":
