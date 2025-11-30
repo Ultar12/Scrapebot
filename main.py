@@ -5,22 +5,24 @@ import re
 import io
 import time
 from selenium import webdriver
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
+# --- UPDATED IMPORTS FOR CHROME ---
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.service import Service as ChromeService
+# Removed: from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-# Removed: from webdriver_manager.firefox import GeckoDriverManager (Not needed on Heroku)
-from selenium.webdriver.firefox.service import Service as FirefoxService
+# Removed: from selenium.webdriver.firefox.service import Service as FirefoxService
 
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
-# --- Logging Setup ---
+# --- Logging Setup (No Change) ---
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (No Change) ---
 PORT = int(os.environ.get("PORT", 8080))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL_BASE = os.getenv("WEBHOOK_URL_BASE")
@@ -29,38 +31,35 @@ WEBHOOK_URL_BASE = os.getenv("WEBHOOK_URL_BASE")
 URL_LEVANTER = os.getenv("URL_LEVANTER", "https://levanter-delta.vercel.app/")
 URL_RAGANORK = os.getenv("URL_RAGANORK", "https://session.raganork.site/")
 
-# --- UPDATED Selenium Setup ---
+# --- UPDATED Selenium Setup for CHROME ---
 
-# Define the paths expected by the modern, recommended Heroku buildpacks
-# (e.g., zibdie/heroku-buildpack-firefox-geckodriver)
-FIREFOX_BIN_PATH = os.environ.get("FIREFOX_BIN", "/app/vendor/firefox/firefox")
-GECKO_PATH = os.environ.get("GECKODRIVER_PATH", "/app/vendor/geckodriver/geckodriver")
+# Define the paths provided by the Heroku buildpacks (heroku-buildpack-chromedriver & google-chrome)
+CHROME_BIN_PATH = os.environ.get("GOOGLE_CHROME_BIN", "/app/.apt/usr/bin/google-chrome")
+CHROME_DRIVER_PATH = os.environ.get("CHROMEDRIVER_PATH", "/app/.chromedriver/bin/chromedriver")
 
-def get_firefox_driver():
-    """Initializes and returns a configured headless Firefox driver."""
+def get_chrome_driver():
+    """Initializes and returns a configured headless Chrome driver."""
     
-    # Critical Check: Ensure binaries exist as per the buildpack configuration
-    if not os.path.exists(FIREFOX_BIN_PATH):
-        raise FileNotFoundError(f"Firefox binary not found at {FIREFOX_BIN_PATH}. Check your Heroku buildpacks.")
-    if not os.path.exists(GECKO_PATH):
-        raise FileNotFoundError(f"Geckodriver binary not found at {GECKO_PATH}. Check your Heroku buildpacks.")
+    # Critical Check: Ensure binaries exist
+    if not os.path.exists(CHROME_BIN_PATH):
+        raise FileNotFoundError(f"Chrome binary not found at {CHROME_BIN_PATH}. Check your Heroku buildpacks.")
+    if not os.path.exists(CHROME_DRIVER_PATH):
+        raise FileNotFoundError(f"Chromedriver binary not found at {CHROME_DRIVER_PATH}. Check your Heroku buildpacks.")
 
-    options = FirefoxOptions()
+    options = ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1280,720")
-    # Setting the binary location is crucial on Heroku
-    options.binary_location = FIREFOX_BIN_PATH
+    # Setting binary location is essential for Heroku deployment
+    options.binary_location = CHROME_BIN_PATH
 
-    # Service setup using the explicit path for Geckodriver
-    service = FirefoxService(executable_path=GECKO_PATH)
+    # Service setup using the explicit path for Chromedriver
+    service = ChromeService(executable_path=CHROME_DRIVER_PATH)
 
-    driver = webdriver.Firefox(service=service, options=options)
+    driver = webdriver.Chrome(service=service, options=options)
     return driver
-
-# Removed the find_firefox_binary function as it's now replaced by explicit path variables
 
 # --- Telegram Command Handlers (omitted for brevity, assume correct) ---
 
@@ -86,7 +85,7 @@ async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TY
     mobile_number = context.args[0].strip()
     await update.message.reply_text(f"⏳ Processing Raganork request for `{mobile_number}`. This might take up to 45 seconds...")
     try:
-        # Use asyncio.to_thread for driver initialization, which can be synchronous/blocking
+        # IMPORTANT: Call the new get_chrome_driver function
         asyncio.create_task(raganork_pairing_automation_task(update, mobile_number, context))
     except Exception as e:
         await update.message.reply_text(f"🚨 Critical Error: Could not start the Raganork automation process. {e}")
@@ -103,7 +102,6 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
     logger.info(f"Starting Raganork Selenium job for number: {mobile_number}")
     
     # Pre-process the number: separate country code and number body
-    # IMPROVEMENT: Updated regex to better handle numbers that might start with 0 after country code
     match = re.match(r"^\+(\d+)(.*)$", mobile_number)
     if not match:
         await update.message.reply_text("❌ Raganork: Invalid mobile number format. Must start with '+'.")
@@ -115,16 +113,15 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
     driver = None
     try:
         # Initialize the driver using asyncio.to_thread
-        # This is a critical best practice since Selenium/WebDriver calls are blocking
-        driver = await asyncio.to_thread(get_firefox_driver) 
-        wait = WebDriverWait(driver, 25) # IMPROVEMENT: Increased wait timeout for stability
+        # IMPORTANT: Call the new get_chrome_driver function
+        driver = await asyncio.to_thread(get_chrome_driver) 
+        wait = WebDriverWait(driver, 25) # Increased wait timeout for stability
         
         # 1. Navigate and take INITIAL screenshot
         driver.get(URL_RAGANORK) 
         logger.info("Navigated to Raganork homepage.")
 
         # --- INITIAL DEBUG SCREENSHOT ---
-        # NOTE: Screenshot buffer creation is synchronous, but that's fine inside the to_thread context
         screenshot_buffer = io.BytesIO(driver.get_screenshot_as_png())
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
@@ -144,7 +141,6 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
         logger.info("Clicked country code dropdown.")
 
         # 4. Select the correct country code
-        # IMPROVEMENT: Using a robust selector that finds the LI containing the text
         country_code_option_selector = (By.XPATH, f'//li[contains(text(), "{country_code}")]') 
         wait.until(EC.presence_of_element_located(country_code_option_selector)).click()
         logger.info(f"Selected country code: {country_code}.")
@@ -161,7 +157,6 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
         
         # 7. Wait for the result modal to appear (the readonly input field)
         result_field_selector = (By.XPATH, '//input[@readonly]')
-        # IMPROVEMENT: Add a sleep after clicking GET CODE to allow the server to process, then wait
         time.sleep(2) 
         result_element = wait.until(EC.presence_of_element_located(result_field_selector))
         
@@ -180,12 +175,10 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
         
         # --- DEBUGGING: TAKE SCREENSHOT ON FINAL FAILURE ---
         if driver:
-            # Send an error message first, then the photo
             await update.message.reply_text(
                 f"❌ Raganork automation failed for `{mobile_number}`. Error: {type(e).__name__}. Check the screenshot below!"
             )
             
-            # Use asyncio.to_thread for screenshot if needed, but here it's fine since we're already handling errors
             screenshot_buffer = io.BytesIO(driver.get_screenshot_as_png())
             
             await context.bot.send_photo(
@@ -196,7 +189,7 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
         
     finally:
         if driver:
-            # IMPORTANT: Use asyncio.to_thread for driver.quit() as it's a synchronous call
+            # IMPORTANT: Use asyncio.to_thread for driver.quit()
             await asyncio.to_thread(driver.quit)
         logger.info("Raganork Browser closed.")
 
