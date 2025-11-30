@@ -2,8 +2,10 @@ import asyncio
 import os
 import logging
 from playwright.async_api import async_playwright
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.error import TelegramError
 
 # --- Logging Setup ---
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -19,7 +21,7 @@ TARGET_URL = os.getenv("TARGET_URL", "https://levanter-delta.vercel.app/")
 AD_BLOCK_DOMAINS = [
     "google-analytics", "doubleclick", "adservice", "googlesyndication", 
     "facebook.com/tr", "hotjar", "analytics", "cloudflareinsights",
-    "fonts.gstatic.com", "yandex", "popup", "ad" 
+    "fonts.gstatic.com", "yandex", "popup", "ad", "redirect" 
 ]
 
 # --- Playwright Request Handler ---
@@ -33,6 +35,43 @@ async def route_handler(route):
         await route.abort()
     else:
         await route.continue_()
+
+# --- Self-Correcting Navigation Function ---
+
+async def safe_click_and_correct(page, selector, target_page_url, attempt=1):
+    """
+    Attempts to click a selector. If it results in a redirect, goes back and retries once.
+    Returns True if the click was successful and the browser is on the correct page.
+    """
+    MAX_ATTEMPTS = 3
+    if attempt > MAX_ATTEMPTS:
+        raise TimeoutError(f"Failed to execute click on '{selector}' after {MAX_ATTEMPTS} attempts due to constant redirection.")
+    
+    logger.info(f"Click attempt {attempt} on selector: {selector}")
+    
+    try:
+        # Click the element
+        await page.click(selector, timeout=10000)
+        
+        # Give a small pause for any redirect to kick in
+        await asyncio.sleep(0.5)
+        
+        # Check if the URL is still the base target URL (or the expected next URL)
+        if page.url.startswith(target_page_url):
+            logger.info(f"Click successful and remains on base URL: {page.url}")
+            return True # Success
+        else:
+            # We were redirected to an ad/junk page
+            logger.warning(f"Click on '{selector}' redirected to: {page.url}. Going back...")
+            await page.go_back()
+            
+            # Now, retry the click
+            return await safe_click_and_correct(page, selector, target_page_url, attempt + 1)
+            
+    except Exception as e:
+        logger.error(f"Error during safe_click_and_correct: {e}")
+        # If the click fails for another reason (e.g., element not found initially), let it propagate
+        raise
 
 
 # --- Telegram Command Handlers ---
@@ -66,7 +105,7 @@ async def pair_levanter_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     await update.message.reply_text(
-        f"⏳ Processing request for number: `{mobile_number}`. This might take up to 45 seconds..."
+        f"⏳ Processing request for number: `{mobile_number}`. This might take up to 60 seconds..."
     )
 
     try:
@@ -96,38 +135,37 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
         logger.info("Ads and non-essential assets blocked.")
 
         try:
-            # Increased page timeout for slower connections/render times
+            # Navigate to the target site
             await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=75000) 
             logger.info("Navigated to homepage.")
             
-            # 1. Click 'Session'
+            # 1. Click 'Session' (Uses safe click)
             session_selector = 'text="Session"'
-            await page.click(session_selector, timeout=15000)
-            logger.info("Clicked 'Session'.")
+            await safe_click_and_correct(page, session_selector, TARGET_URL)
+            logger.info("Successfully clicked 'Session'.")
             
-            # 2. Click 'Get Pairing Code' button (the visible button on the next page/modal)
+            # 2. Click 'Get Pairing Code' button (Uses safe click)
             get_code_button_selector = 'button:has-text("Get Pairing Code")'
             await page.wait_for_selector(get_code_button_selector, timeout=15000)
-            await page.click(get_code_button_selector)
-            logger.info("Clicked first 'Get Pairing Code'.")
+            await safe_click_and_correct(page, get_code_button_selector, TARGET_URL)
+            logger.info("Successfully clicked 'Get Pairing Code'.")
 
-            # 3. Wait for the mobile number input modal to appear and fill the number
+            # 3. Fill the number (Wait for the input to appear)
             input_box_selector = 'input[placeholder*="+1234567890"]'
             await page.wait_for_selector(input_box_selector, timeout=15000)
             await page.fill(input_box_selector, mobile_number)
             logger.info(f"Inputted mobile number: {mobile_number}")
 
-            # 4. Click 'Generate Pairing Code' (the button inside the modal/form)
+            # 4. Click 'Generate Pairing Code' (This should not redirect, so use standard click)
             generate_button_selector = 'button:has-text("Generate Pairing Code")'
             await page.click(generate_button_selector)
             logger.info("Clicked 'Generate Pairing Code'.")
 
             # 5. Wait for the resulting pairing code
-            # CRITICAL FIX: Wait for the *input box* to become hidden (or detach) which means 
-            # the form submission was successful and the next element (the code) should be visible.
+            # Wait for the input box to become hidden, signifying form submission success.
             await page.wait_for_selector(input_box_selector, state='hidden', timeout=30000)
             
-            # Now, grab the code. Assuming the code is displayed in an <h2> tag *after* the input disappears.
+            # Now, grab the code.
             result_code_selector = 'h2' 
             await page.wait_for_selector(result_code_selector, state='attached', timeout=15000)
             
@@ -148,11 +186,9 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
             error_msg = f"Automation failed. Error: {type(e).__name__} - {str(e)}"
             logger.error(error_msg)
             
-            # Check for specific pop-up elements if possible (though harder in headless)
             await update.message.reply_text(
                 f"❌ Automation failed for `{mobile_number}`. \n\n"
-                f"The web process timed out or an element was not found. This can be caused by the blocked pop-up visible in your screenshots."
-                f"Please ensure the number is correct and try again. \n\n"
+                f"The web process failed to bypass the redirect or find a crucial element. Please verify the number and try again. \n\n"
                 f"Error details: {type(e).__name__}"
             )
             
