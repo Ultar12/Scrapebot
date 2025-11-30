@@ -33,6 +33,11 @@ URL_RAGANORK = os.getenv("URL_RAGANORK", "https://session.raganork.site/")
 def get_firefox_driver():
     """Initializes and returns a configured headless Firefox driver."""
     
+    # CRITICAL FIX: Explicitly set the path to the Firefox binary installed by Heroku's apt buildpack
+    FIREFOX_BIN_PATH = "/usr/bin/firefox"
+    if not os.path.exists(FIREFOX_BIN_PATH):
+        raise FileNotFoundError(f"Firefox binary not found at {FIREFOX_BIN_PATH}. Check Aptfile.")
+
     # Configure Firefox options for Heroku environment
     options = FirefoxOptions()
     options.add_argument("--headless")
@@ -41,19 +46,18 @@ def get_firefox_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1280,720")
     
+    # Set the binary location
+    options.binary_location = FIREFOX_BIN_PATH
+
     # Initialize the GeckoDriver using webdriver_manager
-    # This automatically downloads the correct driver binary
     service = FirefoxService(GeckoDriverManager().install())
     
     # Initialize the WebDriver
     driver = webdriver.Firefox(service=service, options=options)
     
-    # Simple ad-block strategy: just block known hostnames using network conditions (Playwright-style)
-    # Selenium makes network interception complicated, so we rely on the faster browser/cleaner site.
-    
     return driver
 
-# --- Telegram Command Handlers (omitted for brevity, assume correct) ---
+# --- Telegram Command Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message and instructions on /start."""
@@ -68,9 +72,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def pair_levanter_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the /pairlevanter command."""
     await update.message.reply_text("❌ Levanter automation is currently disabled due to complex redirect issues. Please use the /pairrag command.")
-    # The Levanter code is complex due to redirection loops and is kept dormant for now.
-    # The complexity in Selenium for redirect correction is higher than Playwright.
-    # If the Raganork job works, we can try adapting the Levanter job.
+
+# The levanter_pairing_automation_task is omitted here as it's disabled.
 
 async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the /pairrag command."""
@@ -80,7 +83,6 @@ async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TY
     mobile_number = context.args[0].strip()
     await update.message.reply_text(f"⏳ Processing Raganork request for `{mobile_number}`. This might take up to 45 seconds...")
     try:
-        # Pass context object to the automation task
         asyncio.create_task(raganork_pairing_automation_task(update, mobile_number, context))
     except Exception as e:
         await update.message.reply_text(f"🚨 Critical Error: Could not start the Raganork automation process. {e}")
@@ -127,7 +129,7 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
         logger.info("Clicked 'Enter code'.")
         
         # 3. Click the country code dropdown to open the list
-        country_dropdown_selector = (By.XPATH, '//div[contains(@class, "country-code-select")]') # Adjust selector if needed
+        country_dropdown_selector = (By.XPATH, '//div[contains(@class, "country-code-select")]')
         wait.until(EC.element_to_be_clickable(country_dropdown_selector)).click()
         logger.info("Clicked country code dropdown.")
 
