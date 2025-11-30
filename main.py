@@ -13,7 +13,10 @@ logger = logging.getLogger(__name__)
 # Heroku provides the PORT variable for web services
 PORT = int(os.environ.get("PORT", 8080))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-HEROKU_APP_NAME = os.getenv("HEROKU_APP_NAME") # Heroku sets this if using the app name
+
+# CRITICAL CHANGE: Use WEBHOOK_URL_BASE instead of HEROKU_APP_NAME
+WEBHOOK_URL_BASE = os.getenv("WEBHOOK_URL_BASE")
+
 TARGET_URL = os.getenv("TARGET_URL", "https://levanter-delta.vercel.app/")
 
 # List of common keywords/domains associated with ads/tracking to block
@@ -36,7 +39,7 @@ async def route_handler(route):
         await route.continue_()
 
 
-# --- Telegram Command Handlers ---
+# --- Telegram Command Handlers (rest unchanged) ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message and instructions on /start."""
@@ -85,11 +88,9 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
     
     logger.info(f"Starting Playwright job for number: {mobile_number}")
     
-    # NOTE: The Heroku buildpack provides the necessary browser path
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            # Playwright on Heroku usually works without explicit args, but keep them for robustness
             args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         )
         page = await browser.new_page()
@@ -124,7 +125,6 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
             logger.info("Clicked 'Generate Pairing Code'.")
 
             # 5. Wait for the resulting pairing code
-            # Assuming the code is displayed in an <h2> tag after submission
             result_code_selector = 'h2' 
             await page.wait_for_selector(result_code_selector, state='attached', timeout=25000)
             
@@ -163,28 +163,27 @@ def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN environment variable is not set. Exiting.")
         return
+    
+    # Check for the required webhook URL
+    if not WEBHOOK_URL_BASE:
+        logger.error("WEBHOOK_URL_BASE environment variable is not set. Cannot configure webhook. Exiting.")
+        return
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("pairlevanter", pair_levanter_command))
 
-    # Heroku environment always requires webhook/server mode for web processes
-    if not HEROKU_APP_NAME:
-        logger.error("HEROKU_APP_NAME environment variable is not set. Cannot configure webhook.")
-        return
-
-    # Heroku provides the app name which is used to construct the public URL
-    app_url = f"https://{HEROKU_APP_NAME}.herokuapp.com/"
-    
-    logger.info(f"Running in Webhook mode on port {PORT}. URL: {app_url}")
-    
     # Configure the webhook
+    webhook_url = f"{WEBHOOK_URL_BASE}{TELEGRAM_BOT_TOKEN}"
+    
+    logger.info(f"Running in Webhook mode on port {PORT}. Webhook URL: {webhook_url}")
+    
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=TELEGRAM_BOT_TOKEN, 
-        webhook_url=f"{app_url}{TELEGRAM_BOT_TOKEN}"
+        webhook_url=webhook_url
     )
 
 if __name__ == "__main__":
