@@ -110,7 +110,7 @@ async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TY
     mobile_number = context.args[0].strip()
     await update.message.reply_text(f"⏳ Processing Raganork request for `{mobile_number}`. This might take up to 45 seconds...")
     try:
-        asyncio.create_task(raganork_pairing_automation_task(update, mobile_number))
+        asyncio.create_task(raganork_pairing_automation_task(update, mobile_number, context))
     except Exception as e:
         await update.message.reply_text(f"🚨 Critical Error: Could not start the Raganork automation process. {e}")
 
@@ -177,7 +177,7 @@ async def levanter_pairing_automation_task(update: Update, mobile_number: str):
 
 # --- Automation Task 2: Raganork (Simpler Sequential Logic with Debugging) ---
 
-async def raganork_pairing_automation_task(update: Update, mobile_number: str):
+async def raganork_pairing_automation_task(update: Update, mobile_number: str, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Starting Raganork Playwright job for number: {mobile_number}")
     
@@ -247,13 +247,14 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str):
         except Exception as e:
             logger.error(f"Raganork Automation failed: {e}")
             
-            # --- DEBUGGING: TAKE SCREENSHOT ON FAILURE ---
-            screenshot_buffer = io.BytesIO(await page.screenshot())
+            # --- DEBUGGING: TAKE SCREENSHOT ON FAILURE (FIXED I/O) ---
+            screenshot_buffer = io.BytesIO(await page.screenshot(full_page=True))
             
-            # Send the screenshot to the user
-            await update.message.reply_photo(
+            # Send the screenshot using the robust context.bot method
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
                 photo=screenshot_buffer,
-                caption=f"❌ Raganork Failure! Automation stopped here. Error: {type(e).__name__}. Please check the image and share it with me."
+                caption=f"❌ Raganork Failure! Automation stopped here. Error: {type(e).__name__}. Please share the image with me."
             )
             
         finally:
