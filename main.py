@@ -19,7 +19,7 @@ TARGET_URL = os.getenv("TARGET_URL", "https://levanter-delta.vercel.app/")
 AD_BLOCK_DOMAINS = [
     "google-analytics", "doubleclick", "adservice", "googlesyndication", 
     "facebook.com/tr", "hotjar", "analytics", "cloudflareinsights",
-    "fonts.gstatic.com", "yandex"
+    "fonts.gstatic.com", "yandex", "popup", "ad" 
 ]
 
 # --- Playwright Request Handler ---
@@ -112,7 +112,6 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
             logger.info("Clicked first 'Get Pairing Code'.")
 
             # 3. Wait for the mobile number input modal to appear and fill the number
-            # Using a highly generic input selector for better reliability
             input_box_selector = 'input[placeholder*="+1234567890"]'
             await page.wait_for_selector(input_box_selector, timeout=15000)
             await page.fill(input_box_selector, mobile_number)
@@ -124,9 +123,13 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
             logger.info("Clicked 'Generate Pairing Code'.")
 
             # 5. Wait for the resulting pairing code
-            # We wait up to 30 seconds for the code to be processed and displayed.
+            # CRITICAL FIX: Wait for the *input box* to become hidden (or detach) which means 
+            # the form submission was successful and the next element (the code) should be visible.
+            await page.wait_for_selector(input_box_selector, state='hidden', timeout=30000)
+            
+            # Now, grab the code. Assuming the code is displayed in an <h2> tag *after* the input disappears.
             result_code_selector = 'h2' 
-            await page.wait_for_selector(result_code_selector, state='attached', timeout=30000)
+            await page.wait_for_selector(result_code_selector, state='attached', timeout=15000)
             
             final_code = await page.inner_text(result_code_selector)
             code_text = final_code.strip()
@@ -145,9 +148,11 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
             error_msg = f"Automation failed. Error: {type(e).__name__} - {str(e)}"
             logger.error(error_msg)
             
+            # Check for specific pop-up elements if possible (though harder in headless)
             await update.message.reply_text(
                 f"❌ Automation failed for `{mobile_number}`. \n\n"
-                f"The web process timed out or an element was not found. Please try again. \n\n"
+                f"The web process timed out or an element was not found. This can be caused by the blocked pop-up visible in your screenshots."
+                f"Please ensure the number is correct and try again. \n\n"
                 f"Error details: {type(e).__name__}"
             )
             
@@ -172,8 +177,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("pairlevanter", pair_levanter_command))
 
-    # Heroku environment always requires webhook/server mode for web processes
-    
+    # Construct the app URL dynamically using the provided base URL
     app_url = WEBHOOK_URL_BASE
     
     logger.info(f"Running in Webhook mode on port {PORT}. Base URL: {app_url}")
