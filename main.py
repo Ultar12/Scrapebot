@@ -198,42 +198,52 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
         await page.route("**/*", route_handler)
 
         try:
+            # 1. Navigate and take INITIAL screenshot
             await page.goto(URL_RAGANORK, wait_until="domcontentloaded", timeout=45000) 
             logger.info("Navigated to Raganork homepage.")
 
-            # 1. Click 'Enter code' button
+            # --- INITIAL DEBUG SCREENSHOT ---
+            screenshot_buffer = io.BytesIO(await page.screenshot(full_page=True))
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=screenshot_buffer,
+                caption="✅ INITIAL LOAD: This is what the browser sees."
+            )
+            # --- END INITIAL DEBUG SCREENSHOT ---
+
+            # 2. Click 'Enter code' button
             enter_code_selector = 'button:has-text("Enter code")'
             await page.click(enter_code_selector, timeout=10000)
             logger.info("Clicked 'Enter code'.")
             
-            # 2. Click the country code dropdown to open the list
+            # 3. Click the country code dropdown to open the list
             country_dropdown_selector = 'div.country-code-select'
             await page.wait_for_selector(country_dropdown_selector, timeout=10000)
             await page.click(country_dropdown_selector)
             logger.info("Clicked country code dropdown.")
 
-            # 3. Select the correct country code
+            # 4. Select the correct country code
             country_code_option_selector = f'text="{country_code}"'
             await page.wait_for_selector(country_code_option_selector, timeout=10000)
             await page.click(country_code_option_selector)
             logger.info(f"Selected country code: {country_code}.")
             
-            # 4. Input the phone number body
+            # 5. Input the phone number body
             phone_input_selector = 'input[placeholder="Enter phone number"]'
             await page.wait_for_selector(phone_input_selector, timeout=10000)
             await page.fill(phone_input_selector, number_body)
             logger.info(f"Inputted number body: {number_body}")
 
-            # 5. Click 'GET CODE'
+            # 6. Click 'GET CODE'
             get_code_button_selector = 'button:has-text("GET CODE")'
             await page.click(get_code_button_selector)
             logger.info("Clicked 'GET CODE'.")
             
-            # 6. Wait for the result modal to appear
+            # 7. Wait for the result modal to appear
             result_field_selector = 'input[readonly]'
             await page.wait_for_selector(result_field_selector, state='attached', timeout=30000)
             
-            # Extract the code from the input field
+            # 8. Extract the code
             final_code = await page.get_attribute(result_field_selector, 'value')
             code_text = final_code.strip()
 
@@ -247,14 +257,12 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
         except Exception as e:
             logger.error(f"Raganork Automation failed: {e}")
             
-            # --- DEBUGGING: TAKE SCREENSHOT ON FAILURE (FIXED I/O) ---
+            # --- DEBUGGING: TAKE SCREENSHOT ON FINAL FAILURE ---
             screenshot_buffer = io.BytesIO(await page.screenshot(full_page=True))
-            
-            # Send the screenshot using the robust context.bot method
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=screenshot_buffer,
-                caption=f"❌ Raganork Failure! Automation stopped here. Error: {type(e).__name__}. Please share the image with me."
+                caption=f"❌ Raganork Failure! Automation stopped here. Error: {type(e).__name__}. Share this final image with me."
             )
             
         finally:
