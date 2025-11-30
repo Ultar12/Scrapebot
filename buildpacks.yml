@@ -1,5 +1,5 @@
 buildpacks:
-  - https://github.com/heroku/heroku-buildpack-apt
-  - https://github.com/heroku/heroku-buildpack-firefox
-  - https://github.com/heroku/heroku-buildpack-geckodriver
-  - heroku/python
+  - https://github.com/heroku/heroku-buildpack-apt # General dependencies
+  - https://github.com/heroku/heroku-buildpack-firefox # Old and likely broken
+  - https://github.com/heroku/heroku-buildpack-geckodriver # Old and likely broken
+  - heroku/python # Your main app buildpack
