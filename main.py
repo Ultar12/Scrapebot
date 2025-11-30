@@ -30,13 +30,22 @@ URL_LEVANTER = os.getenv("URL_LEVANTER", "https://levanter-delta.vercel.app/")
 URL_RAGANORK = os.getenv("URL_RAGANORK", "https://session.raganork.site/")
 
 # --- Selenium Setup ---
+def find_firefox_binary():
+    """Searches for the Firefox binary in common Heroku paths."""
+    # Path installed by heroku-community/firefox buildpack
+    paths = [
+        "/app/vendor/firefox/firefox", # Common path for the community buildpack
+        "/usr/bin/firefox"            # Default path (if apt worked)
+    ]
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError("Firefox binary not found in expected Heroku paths. Check buildpacks and Aptfile.")
+
 def get_firefox_driver():
     """Initializes and returns a configured headless Firefox driver."""
     
-    # CRITICAL FIX: Explicitly set the path to the Firefox binary installed by Heroku's apt buildpack
-    FIREFOX_BIN_PATH = "/usr/bin/firefox"
-    if not os.path.exists(FIREFOX_BIN_PATH):
-        raise FileNotFoundError(f"Firefox binary not found at {FIREFOX_BIN_PATH}. Check Aptfile.")
+    FIREFOX_BIN_PATH = find_firefox_binary()
 
     # Configure Firefox options for Heroku environment
     options = FirefoxOptions()
@@ -57,7 +66,7 @@ def get_firefox_driver():
     
     return driver
 
-# --- Telegram Command Handlers ---
+# --- Telegram Command Handlers (omitted for brevity, assume correct) ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message and instructions on /start."""
@@ -73,8 +82,6 @@ async def pair_levanter_command(update: Update, context: ContextTypes.DEFAULT_TY
     """Handles the /pairlevanter command."""
     await update.message.reply_text("❌ Levanter automation is currently disabled due to complex redirect issues. Please use the /pairrag command.")
 
-# The levanter_pairing_automation_task is omitted here as it's disabled.
-
 async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the /pairrag command."""
     if not context.args:
@@ -86,6 +93,11 @@ async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TY
         asyncio.create_task(raganork_pairing_automation_task(update, mobile_number, context))
     except Exception as e:
         await update.message.reply_text(f"🚨 Critical Error: Could not start the Raganork automation process. {e}")
+
+# --- Automation Task 1: Levanter (Disabled) ---
+async def levanter_pairing_automation_task(update: Update, mobile_number: str):
+    # Disabled for stability
+    pass 
 
 # --- Automation Task 2: Raganork (Simpler Sequential Logic with Debugging) ---
 
@@ -129,7 +141,7 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
         logger.info("Clicked 'Enter code'.")
         
         # 3. Click the country code dropdown to open the list
-        country_dropdown_selector = (By.XPATH, '//div[contains(@class, "country-code-select")]')
+        country_dropdown_selector = (By.XPATH, '//div[contains(@class, "country-code-select")]') 
         wait.until(EC.element_to_be_clickable(country_dropdown_selector)).click()
         logger.info("Clicked country code dropdown.")
 
