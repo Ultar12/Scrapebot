@@ -1,6 +1,5 @@
 import asyncio
 import os
-import httpx
 import logging
 from playwright.async_api import async_playwright
 from telegram import Update
@@ -11,9 +10,10 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
+# Heroku provides the PORT variable for web services
 PORT = int(os.environ.get("PORT", 8080))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
+HEROKU_APP_NAME = os.getenv("HEROKU_APP_NAME") # Heroku sets this if using the app name
 TARGET_URL = os.getenv("TARGET_URL", "https://levanter-delta.vercel.app/")
 
 # List of common keywords/domains associated with ads/tracking to block
@@ -23,7 +23,7 @@ AD_BLOCK_DOMAINS = [
     "fonts.gstatic.com"
 ]
 
-# --- Playwright Request Handler (Fixes SyntaxError) ---
+# --- Playwright Request Handler ---
 
 async def route_handler(route):
     """Aborts requests for known ad/tracker domains and non-essential assets."""
@@ -33,10 +33,10 @@ async def route_handler(route):
     if is_non_essential or is_ad_or_tracker:
         await route.abort()
     else:
-        await route.continue_() # Using route.continue_() for maximum compatibility
+        await route.continue_()
 
 
-# --- Telegram Command Handlers (using the new `route_handler`) ---
+# --- Telegram Command Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message and instructions on /start."""
@@ -85,14 +85,15 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
     
     logger.info(f"Starting Playwright job for number: {mobile_number}")
     
+    # NOTE: The Heroku buildpack provides the necessary browser path
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
+            # Playwright on Heroku usually works without explicit args, but keep them for robustness
             args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         )
         page = await browser.new_page()
 
-        # Register the clean route handler function
         await page.route("**/*", route_handler)
         logger.info("Ads and non-essential assets blocked.")
 
@@ -117,20 +118,20 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
             await page.fill(input_box_selector, mobile_number)
             logger.info(f"Inputted mobile number: {mobile_number}")
 
-            # 4. Click 'Generate Pairing Code'
+            # 4. Click 'Generate Pairing Code' (the second time)
             generate_button_selector = 'button:has-text("Generate Pairing Code")'
             await page.click(generate_button_selector)
             logger.info("Clicked 'Generate Pairing Code'.")
 
             # 5. Wait for the resulting pairing code
+            # Assuming the code is displayed in an <h2> tag after submission
             result_code_selector = 'h2' 
             await page.wait_for_selector(result_code_selector, state='attached', timeout=25000)
             
             final_code = await page.inner_text(result_code_selector)
             code_text = final_code.strip()
             
-            if len(code_text) > 50 or not code_text or "Error" in code_text:
-                 # Basic check to see if the extraction was valid
+            if len(code_text) > 50 or not code_text or "Error" in code_text or "Mobile" in code_text:
                  raise ValueError("Extraction failed or returned an error message.")
 
             logger.info(f"Successfully extracted Pairing Code: {code_text}")
@@ -141,12 +142,12 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
             )
             
         except Exception as e:
-            error_msg = f"Automation failed at {page.url if 'page' in locals() else 'unknown step'}. Error: {type(e).__name__} - {str(e)}"
+            error_msg = f"Automation failed. Error: {type(e).__name__} - {str(e)}"
             logger.error(error_msg)
             
             await update.message.reply_text(
                 f"❌ Automation failed for `{mobile_number}`. \n\n"
-                f"The process timed out or an element was not found. Please try again. \n\n"
+                f"The web process timed out or an element was not found. Please try again. \n\n"
                 f"Error details: {type(e).__name__}"
             )
             
@@ -158,101 +159,33 @@ async def pairing_code_automation_task(update: Update, mobile_number: str):
 # --- Main Application Runner ---
 
 def main() -> None:
-    """Start the bot in Webhook or Polling mode."""
+    """Start the bot."""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN environment variable is not set. Exiting.")
         return
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Register handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("pairlevanter", pair_levanter_command))
 
-    if RENDER_EXTERNAL_URL:
-        # --- Webhook Mode (For Render Deployment) ---
-        # The bot is set up to listen on the PORT provided by Render
-        webhook_url = f"{RENDER_EXTERNAL_URL}/{TELEGRAM_BOT_TOKEN}"
-        logger.info(f"Running in Webhook mode on port {PORT}. Webhook URL: {webhook_url}")
-        
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=TELEGRAM_BOT_TOKEN,
-            webhook_url=webhook_url
-        )
-    else:
-        # --- Polling Mode (For Local Testing) ---
-        logger.info("RENDER_EXTERNAL_URL not found. Running in Polling mode for local testing.")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Heroku environment always requires webhook/server mode for web processes
+    if not HEROKU_APP_NAME:
+        logger.error("HEROKU_APP_NAME environment variable is not set. Cannot configure webhook.")
+        return
 
+    # Heroku provides the app name which is used to construct the public URL
+    app_url = f"https://{HEROKU_APP_NAME}.herokuapp.com/"
+    
+    logger.info(f"Running in Webhook mode on port {PORT}. URL: {app_url}")
+    
+    # Configure the webhook
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TELEGRAM_BOT_TOKEN, 
+        webhook_url=f"{app_url}{TELEGRAM_BOT_TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
-```eof
-
----
-
-## 2. `requirements.txt` (Dependencies)
-
-This uses the corrected, available version of the Telegram library (`20.8`).
-
-```text:Python Dependencies:requirements.txt
-playwright
-httpx
-python-telegram-bot==20.8
-```eof
-
----
-
-## 3. `Dockerfile` (Environment Setup)
-
-This is the standard, clean Docker configuration for Playwright.
-
-```dockerfile:Playwright Environment:Dockerfile
-# Use a Python image with pre-installed Chromium dependencies
-FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
-
-# Set the working directory
-WORKDIR /app
-
-# Copy the dependency file and install Python packages
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of your application code
-COPY . .
-```eof
-
----
-
-## 4. `render.yaml` (Web Service Blueprint)
-
-This uses the robust `web` service type and simple start command, which avoids all previous deployment errors.
-
-```yaml:Render Deployment Blueprint (Web Service):render.yaml
-# Render Blueprint for the Web Automation Web Service
-services:
-  - type: web
-    name: pairing-code-bot
-    env: docker
-    dockerfilePath: Dockerfile
-    autoDeploy: true 
-    buildCommand: ""
-    
-    # Simple start command for the Telegram bot webhook server
-    startCommand: "python main.py"
-    
-    # Render needs the web service to be open on the port defined by the PORT env var
-    port: 8080 
-
-    envVars:
-      - key: TARGET_URL
-        value: https://levanter-delta.vercel.app/
-        
-      # 🔐 SECRETS: sync: false means the value MUST be set in the Render dashboard UI.
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-```eof
-
----
