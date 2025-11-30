@@ -3,7 +3,14 @@ import os
 import logging
 import re
 import io
-from playwright.async_api import async_playwright
+import time
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.firefox import GeckoDriverManager
+from selenium.webdriver.firefox.service import Service as FirefoxService
 
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -18,65 +25,33 @@ PORT = int(os.environ.get("PORT", 8080))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL_BASE = os.getenv("WEBHOOK_URL_BASE")
 
-# Define target URLs for the two services
+# Define target URLs
 URL_LEVANTER = os.getenv("URL_LEVANTER", "https://levanter-delta.vercel.app/")
 URL_RAGANORK = os.getenv("URL_RAGANORK", "https://session.raganork.site/")
 
-# List of common keywords/domains associated with ads/tracking to block
-AD_BLOCK_DOMAINS = [
-    "google-analytics", "doubleclick", "adservice", "googlesyndication", 
-    "facebook.com/tr", "hotjar", "analytics", "cloudflareinsights",
-    "fonts.gstatic.com", "yandex", "popup", "ad", "redirect" 
-]
-
-# --- Playwright Request Handler (Ad Blocker) ---
-
-async def route_handler(route):
-    """Aborts requests for known ad/tracker domains and non-essential assets."""
-    is_non_essential = route.request.resource_type in ["image", "font", "media", "stylesheet"]
-    is_ad_or_tracker = any(ad_domain in route.request.url for ad_domain in AD_BLOCK_DOMAINS)
+# --- Selenium Setup ---
+def get_firefox_driver():
+    """Initializes and returns a configured headless Firefox driver."""
     
-    if is_non_essential or is_ad_or_tracker:
-        await route.abort()
-    else:
-        await route.continue_()
-
-# --- Self-Correcting Navigation Function for Levanter ---
-
-async def safe_click_and_correct(page, selector, target_page_url, attempt=1):
-    """
-    Attempts to click a selector. If it results in a redirect, goes back and retries once.
-    Returns True if the click was successful and the browser is on the correct page.
-    """
-    MAX_ATTEMPTS = 3
-    if attempt > MAX_ATTEMPTS:
-        raise TimeoutError(f"Failed to execute click on '{selector}' after {MAX_ATTEMPTS} attempts due to constant redirection.")
+    # Configure Firefox options for Heroku environment
+    options = FirefoxOptions()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1280,720")
     
-    logger.info(f"Click attempt {attempt} on selector: {selector}")
+    # Initialize the GeckoDriver using webdriver_manager
+    # This automatically downloads the correct driver binary
+    service = FirefoxService(GeckoDriverManager().install())
     
-    try:
-        # Click the element
-        await page.click(selector, timeout=10000)
-        
-        # Give a small pause for any redirect to kick in
-        await asyncio.sleep(0.5)
-        
-        # Check if the URL is still the base target URL (or the expected next URL)
-        if page.url.startswith(target_page_url):
-            logger.info(f"Click successful and remains on base URL: {page.url}")
-            return True # Success
-        else:
-            # We were redirected to an ad/junk page
-            logger.warning(f"Click on '{selector}' redirected to: {page.url}. Going back...")
-            await page.go_back()
-            
-            # Now, retry the click
-            return await safe_click_and_correct(page, selector, target_page_url, attempt + 1)
-            
-    except Exception as e:
-        logger.error(f"Error during safe_click_and_correct: {e}")
-        raise
-
+    # Initialize the WebDriver
+    driver = webdriver.Firefox(service=service, options=options)
+    
+    # Simple ad-block strategy: just block known hostnames using network conditions (Playwright-style)
+    # Selenium makes network interception complicated, so we rely on the faster browser/cleaner site.
+    
+    return driver
 
 # --- Telegram Command Handlers (omitted for brevity, assume correct) ---
 
@@ -92,15 +67,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def pair_levanter_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the /pairlevanter command."""
-    if not context.args:
-        await update.message.reply_text("❌ Error: Please provide the mobile number. Example: /pairlevanter +1234567890")
-        return
-    mobile_number = context.args[0].strip()
-    await update.message.reply_text(f"⏳ Processing Levanter request for `{mobile_number}`. This might take up to 60 seconds...")
-    try:
-        asyncio.create_task(levanter_pairing_automation_task(update, mobile_number))
-    except Exception as e:
-        await update.message.reply_text(f"🚨 Critical Error: Could not start the Levanter automation process. {e}")
+    await update.message.reply_text("❌ Levanter automation is currently disabled due to complex redirect issues. Please use the /pairrag command.")
+    # The Levanter code is complex due to redirection loops and is kept dormant for now.
+    # The complexity in Selenium for redirect correction is higher than Playwright.
+    # If the Raganork job works, we can try adapting the Levanter job.
 
 async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the /pairrag command."""
@@ -110,76 +80,16 @@ async def pair_raganork_command(update: Update, context: ContextTypes.DEFAULT_TY
     mobile_number = context.args[0].strip()
     await update.message.reply_text(f"⏳ Processing Raganork request for `{mobile_number}`. This might take up to 45 seconds...")
     try:
+        # Pass context object to the automation task
         asyncio.create_task(raganork_pairing_automation_task(update, mobile_number, context))
     except Exception as e:
         await update.message.reply_text(f"🚨 Critical Error: Could not start the Raganork automation process. {e}")
-
-
-# --- Automation Task 1: Levanter (High Redirect Risk) ---
-
-async def levanter_pairing_automation_task(update: Update, mobile_number: str):
-    # This task uses the complex self-correcting logic (safe_click_and_correct)
-    
-    logger.info(f"Starting Levanter Playwright job for number: {mobile_number}")
-    
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
-        page = await browser.new_page()
-        await page.route("**/*", route_handler)
-
-        try:
-            await page.goto(URL_LEVANTER, wait_until="domcontentloaded", timeout=75000) 
-            
-            # 1. Click 'Session' and handle redirection
-            session_selector = 'text="Session"'
-            await safe_click_and_correct(page, session_selector, URL_LEVANTER)
-            
-            # 2. Click 'Get Pairing Code' button and handle redirection
-            get_code_button_selector = 'button:has-text("Get Pairing Code")'
-            await page.wait_for_selector(get_code_button_selector, timeout=15000)
-            await safe_click_and_correct(page, get_code_button_selector, URL_LEVANTER)
-
-            # 3. Fill the number 
-            input_box_selector = 'input[placeholder*="+1234567890"]'
-            await page.wait_for_selector(input_box_selector, timeout=15000)
-            await page.fill(input_box_selector, mobile_number)
-
-            # 4. Click 'Generate Pairing Code' (standard click)
-            generate_button_selector = 'button:has-text("Generate Pairing Code")'
-            await page.click(generate_button_selector)
-
-            # 5. Wait for the resulting pairing code
-            await page.wait_for_selector(input_box_selector, state='hidden', timeout=30000)
-            
-            result_code_selector = 'h2' 
-            await page.wait_for_selector(result_code_selector, state='attached', timeout=15000)
-            
-            final_code = await page.inner_text(result_code_selector)
-            code_text = final_code.strip()
-            
-            if len(code_text) < 4 or "Error" in code_text:
-                 raise ValueError(f"Extraction failed. Resulted in: {code_text}")
-
-            await update.message.reply_html(
-                f"🎉 Levanter Code for <code>{mobile_number}</code>:\n\n<code>{code_text}</code>"
-            )
-            
-        except Exception as e:
-            logger.error(f"Levanter Automation failed: {e}")
-            await update.message.reply_text(
-                f"❌ Levanter automation failed for `{mobile_number}`. Error: {type(e).__name__}"
-            )
-            
-        finally:
-            await browser.close()
-            logger.info("Levanter Browser closed.")
-
 
 # --- Automation Task 2: Raganork (Simpler Sequential Logic with Debugging) ---
 
 async def raganork_pairing_automation_task(update: Update, mobile_number: str, context: ContextTypes.DEFAULT_TYPE):
     
-    logger.info(f"Starting Raganork Playwright job for number: {mobile_number}")
+    logger.info(f"Starting Raganork Selenium job for number: {mobile_number}")
     
     # Pre-process the number: separate country code and number body
     match = re.match(r"^\+(\d+)(.*)$", mobile_number)
@@ -192,82 +102,86 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str, c
     if number_body.startswith('0'):
         number_body = number_body[1:]
     
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
-        page = await browser.new_page()
-        await page.route("**/*", route_handler)
+    driver = None
+    try:
+        # Initialize the driver
+        driver = await asyncio.to_thread(get_firefox_driver)
+        wait = WebDriverWait(driver, 20) # 20 second wait timeout
+        
+        # 1. Navigate and take INITIAL screenshot
+        driver.get(URL_RAGANORK) 
+        logger.info("Navigated to Raganork homepage.")
 
-        try:
-            # 1. Navigate and take INITIAL screenshot
-            await page.goto(URL_RAGANORK, wait_until="domcontentloaded", timeout=45000) 
-            logger.info("Navigated to Raganork homepage.")
+        # --- INITIAL DEBUG SCREENSHOT ---
+        screenshot_buffer = io.BytesIO(driver.get_screenshot_as_png())
+        await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
+            photo=screenshot_buffer,
+            caption="✅ INITIAL LOAD: This is what the browser sees."
+        )
+        # --- END INITIAL DEBUG SCREENSHOT ---
 
-            # --- INITIAL DEBUG SCREENSHOT ---
-            screenshot_buffer = io.BytesIO(await page.screenshot(full_page=True))
-            await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=screenshot_buffer,
-                caption="✅ INITIAL LOAD: This is what the browser sees."
-            )
-            # --- END INITIAL DEBUG SCREENSHOT ---
+        # 2. Click 'Enter code' button
+        enter_code_selector = (By.XPATH, '//button[contains(text(), "Enter code")]')
+        wait.until(EC.element_to_be_clickable(enter_code_selector)).click()
+        logger.info("Clicked 'Enter code'.")
+        
+        # 3. Click the country code dropdown to open the list
+        country_dropdown_selector = (By.XPATH, '//div[contains(@class, "country-code-select")]') # Adjust selector if needed
+        wait.until(EC.element_to_be_clickable(country_dropdown_selector)).click()
+        logger.info("Clicked country code dropdown.")
 
-            # 2. Click 'Enter code' button
-            enter_code_selector = 'button:has-text("Enter code")'
-            await page.click(enter_code_selector, timeout=10000)
-            logger.info("Clicked 'Enter code'.")
+        # 4. Select the correct country code
+        country_code_option_selector = (By.XPATH, f'//li[text()="{country_code}"]')
+        wait.until(EC.presence_of_element_located(country_code_option_selector)).click()
+        logger.info(f"Selected country code: {country_code}.")
+        
+        # 5. Input the phone number body
+        phone_input_selector = (By.XPATH, '//input[@placeholder="Enter phone number"]')
+        wait.until(EC.presence_of_element_located(phone_input_selector)).send_keys(number_body)
+        logger.info(f"Inputted number body: {number_body}")
+
+        # 6. Click 'GET CODE'
+        get_code_button_selector = (By.XPATH, '//button[contains(text(), "GET CODE")]')
+        wait.until(EC.element_to_be_clickable(get_code_button_selector)).click()
+        logger.info("Clicked 'GET CODE'.")
+        
+        # 7. Wait for the result modal to appear (the readonly input field)
+        result_field_selector = (By.XPATH, '//input[@readonly]')
+        result_element = wait.until(EC.presence_of_element_located(result_field_selector))
+        
+        # 8. Extract the code
+        code_text = result_element.get_attribute('value').strip()
+
+        if len(code_text) < 4:
+             raise ValueError(f"Extraction failed. Resulted in: {code_text}")
+
+        await update.message.reply_html(
+            f"🎉 Raganork Code for <code>{mobile_number}</code>:\n\n<code>{code_text}</code>"
+        )
             
-            # 3. Click the country code dropdown to open the list
-            country_dropdown_selector = 'div.country-code-select'
-            await page.wait_for_selector(country_dropdown_selector, timeout=10000)
-            await page.click(country_dropdown_selector)
-            logger.info("Clicked country code dropdown.")
-
-            # 4. Select the correct country code
-            country_code_option_selector = f'text="{country_code}"'
-            await page.wait_for_selector(country_code_option_selector, timeout=10000)
-            await page.click(country_code_option_selector)
-            logger.info(f"Selected country code: {country_code}.")
+    except Exception as e:
+        logger.error(f"Raganork Automation failed: {e}")
+        
+        # --- DEBUGGING: TAKE SCREENSHOT ON FINAL FAILURE ---
+        if driver:
+            screenshot_buffer = io.BytesIO(driver.get_screenshot_as_png())
             
-            # 5. Input the phone number body
-            phone_input_selector = 'input[placeholder="Enter phone number"]'
-            await page.wait_for_selector(phone_input_selector, timeout=10000)
-            await page.fill(phone_input_selector, number_body)
-            logger.info(f"Inputted number body: {number_body}")
-
-            # 6. Click 'GET CODE'
-            get_code_button_selector = 'button:has-text("GET CODE")'
-            await page.click(get_code_button_selector)
-            logger.info("Clicked 'GET CODE'.")
-            
-            # 7. Wait for the result modal to appear
-            result_field_selector = 'input[readonly]'
-            await page.wait_for_selector(result_field_selector, state='attached', timeout=30000)
-            
-            # 8. Extract the code
-            final_code = await page.get_attribute(result_field_selector, 'value')
-            code_text = final_code.strip()
-
-            if len(code_text) < 4:
-                 raise ValueError(f"Extraction failed. Resulted in: {code_text}")
-
-            await update.message.reply_html(
-                f"🎉 Raganork Code for <code>{mobile_number}</code>:\n\n<code>{code_text}</code>"
-            )
-            
-        except Exception as e:
-            logger.error(f"Raganork Automation failed: {e}")
-            
-            # --- DEBUGGING: TAKE SCREENSHOT ON FINAL FAILURE ---
-            screenshot_buffer = io.BytesIO(await page.screenshot(full_page=True))
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=screenshot_buffer,
                 caption=f"❌ Raganork Failure! Automation stopped here. Error: {type(e).__name__}. Share this final image with me."
             )
+        
+        # Also send a text error message
+        await update.message.reply_text(
+            f"❌ Raganork automation failed for `{mobile_number}`. Error: {type(e).__name__}. Check the screenshot above!"
+        )
             
-        finally:
-            await browser.close()
-            logger.info("Raganork Browser closed.")
+    finally:
+        if driver:
+            driver.quit()
+        logger.info("Raganork Browser closed.")
 
 
 # --- Main Application Runner ---
