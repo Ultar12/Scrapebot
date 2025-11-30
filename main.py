@@ -44,26 +44,24 @@ def find_firefox_binary():
 
 def get_firefox_driver():
     """Initializes and returns a configured headless Firefox driver."""
-    
-    FIREFOX_BIN_PATH = find_firefox_binary()
 
-    # Configure Firefox options for Heroku environment
+    FIREFOX_BIN_PATH = "/app/vendor/firefox/firefox"
+    GECKO_PATH = "/app/vendor/geckodriver/geckodriver"
+
+    if not os.path.exists(FIREFOX_BIN_PATH):
+        raise FileNotFoundError("Firefox binary not found in Heroku /app/vendor/firefox/. Install the correct buildpacks.")
+
     options = FirefoxOptions()
     options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1280,720")
-    
-    # Set the binary location
     options.binary_location = FIREFOX_BIN_PATH
 
-    # Initialize the GeckoDriver using webdriver_manager
-    service = FirefoxService(GeckoDriverManager().install())
-    
-    # Initialize the WebDriver
+    service = FirefoxService(executable_path=GECKO_PATH)
+
     driver = webdriver.Firefox(service=service, options=options)
-    
     return driver
 
 # --- Telegram Command Handlers (omitted for brevity, assume correct) ---
