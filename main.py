@@ -2,9 +2,10 @@ import asyncio
 import os
 import logging
 import re
+import io
 from playwright.async_api import async_playwright
 
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
@@ -74,11 +75,10 @@ async def safe_click_and_correct(page, selector, target_page_url, attempt=1):
             
     except Exception as e:
         logger.error(f"Error during safe_click_and_correct: {e}")
-        # If the click fails for another reason (e.g., element not found initially), let it propagate
         raise
 
 
-# --- Telegram Command Handlers ---
+# --- Telegram Command Handlers (omitted for brevity, assume correct) ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message and instructions on /start."""
@@ -175,7 +175,7 @@ async def levanter_pairing_automation_task(update: Update, mobile_number: str):
             logger.info("Levanter Browser closed.")
 
 
-# --- Automation Task 2: Raganork (Simpler Sequential Logic) ---
+# --- Automation Task 2: Raganork (Simpler Sequential Logic with Debugging) ---
 
 async def raganork_pairing_automation_task(update: Update, mobile_number: str):
     
@@ -189,7 +189,6 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str):
         
     country_code = f"+{match.group(1)}"
     number_body = match.group(2)
-    # Raganork requires removing a leading '0' if present in the number body
     if number_body.startswith('0'):
         number_body = number_body[1:]
     
@@ -208,21 +207,18 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str):
             logger.info("Clicked 'Enter code'.")
             
             # 2. Click the country code dropdown to open the list
-            country_dropdown_selector = 'div.country-code-select' # Assuming a generic selector for the dropdown
+            country_dropdown_selector = 'div.country-code-select'
             await page.wait_for_selector(country_dropdown_selector, timeout=10000)
             await page.click(country_dropdown_selector)
             logger.info("Clicked country code dropdown.")
 
             # 3. Select the correct country code
-            # Since the country list is long and scrollable, we target the specific text.
             country_code_option_selector = f'text="{country_code}"'
             await page.wait_for_selector(country_code_option_selector, timeout=10000)
-            
-            # Use keyboard interaction/scrolling if needed, but a direct click is usually more reliable
             await page.click(country_code_option_selector)
             logger.info(f"Selected country code: {country_code}.")
             
-            # 4. Input the phone number body (without leading zero)
+            # 4. Input the phone number body
             phone_input_selector = 'input[placeholder="Enter phone number"]'
             await page.wait_for_selector(phone_input_selector, timeout=10000)
             await page.fill(phone_input_selector, number_body)
@@ -234,7 +230,6 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str):
             logger.info("Clicked 'GET CODE'.")
             
             # 6. Wait for the result modal to appear
-            # Assuming the result is displayed in a modal that appears after the button click.
             result_field_selector = 'input[readonly]'
             await page.wait_for_selector(result_field_selector, state='attached', timeout=30000)
             
@@ -251,8 +246,14 @@ async def raganork_pairing_automation_task(update: Update, mobile_number: str):
             
         except Exception as e:
             logger.error(f"Raganork Automation failed: {e}")
-            await update.message.reply_text(
-                f"❌ Raganork automation failed for `{mobile_number}`. Error: {type(e).__name__}"
+            
+            # --- DEBUGGING: TAKE SCREENSHOT ON FAILURE ---
+            screenshot_buffer = io.BytesIO(await page.screenshot())
+            
+            # Send the screenshot to the user
+            await update.message.reply_photo(
+                photo=screenshot_buffer,
+                caption=f"❌ Raganork Failure! Automation stopped here. Error: {type(e).__name__}. Please check the image and share it with me."
             )
             
         finally:
